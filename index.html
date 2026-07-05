@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NBA Team Lens</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">NBA</div>
+          <div>
+            <p class="eyebrow">Team Lens</p>
+            <h1>ロスター、成績、サラリーを一画面で</h1>
+          </div>
+        </div>
+
+        <div class="controls">
+          <label>
+            <span>スタッツ年度</span>
+            <select id="statsSeason">
+              <option>2025-26</option>
+              <option>2024-25</option>
+              <option>2023-24</option>
+            </select>
+          </label>
+          <label>
+            <span>サラリー年度</span>
+            <select id="salarySeason">
+              <option>2026-27</option>
+              <option>2025-26</option>
+              <option>2024-25</option>
+            </select>
+          </label>
+          <label>
+            <span>種別</span>
+            <select id="seasonType">
+              <option>Regular Season</option>
+              <option>Playoffs</option>
+              <option>Pre Season</option>
+            </select>
+          </label>
+          <button id="refreshBtn" class="primary-button" type="button">
+            <span>↻</span>
+            最新取得
+          </button>
+        </div>
+
+        <div class="search-box">
+          <input id="searchInput" type="search" placeholder="チーム名で検索" />
+        </div>
+        <div class="team-list" id="teamList"></div>
+      </aside>
+
+      <main class="main">
+        <section class="hero" id="teamHero">
+          <div>
+            <p class="eyebrow" id="teamConference">NBA</p>
+            <h2 id="teamName">Loading...</h2>
+            <p id="teamMeta">データ取得中です。</p>
+          </div>
+          <div class="hero-actions">
+            <a id="nbaTeamLink" target="_blank" rel="noreferrer">NBA.com</a>
+            <a id="salaryLink" target="_blank" rel="noreferrer">Contracts</a>
+          </div>
+        </section>
+
+        <section class="status-strip" id="statusStrip">
+          <div>
+            <span>更新</span>
+            <strong id="updatedAt">-</strong>
+          </div>
+          <div>
+            <span>データ元</span>
+            <strong>NBA Stats / Basketball-Reference</strong>
+          </div>
+          <div>
+            <span>状態</span>
+            <strong id="fetchStatus">取得中</strong>
+          </div>
+        </section>
+
+        <section class="kpi-grid" id="kpiGrid"></section>
+
+        <section class="content-grid">
+          <div class="panel wide">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Salary Players</p>
+                <h3>契約選手と主要スタッツ</h3>
+              </div>
+              <span id="rosterCount" class="pill">0 players</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>選手</th>
+                    <th>Pos</th>
+                    <th>年齢</th>
+                    <th>EXP</th>
+                    <th>PTS</th>
+                    <th>REB</th>
+                    <th>AST</th>
+                    <th>3P%</th>
+                  </tr>
+                </thead>
+                <tbody id="rosterTable"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Salary</p>
+                <h3>サラリー状況</h3>
+              </div>
+              <span id="salaryColumn" class="pill">-</span>
+            </div>
+            <div class="cap-card">
+              <div class="cap-total" id="capTotal">$0</div>
+              <div class="cap-track" id="capTrack"></div>
+              <div class="cap-legend" id="capLegend"></div>
+            </div>
+            <div class="salary-list" id="salaryList"></div>
+          </div>
+        </section>
+
+        <section class="panel draft-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Draft Capital</p>
+              <h3>将来ドラフト指名権</h3>
+            </div>
+            <a id="draftLink" class="panel-link" target="_blank" rel="noreferrer">Fanspo</a>
+          </div>
+          <div class="draft-summary" id="draftSummary"></div>
+          <div class="draft-grid">
+            <div>
+              <div class="draft-section-title">Incoming</div>
+              <div class="draft-list" id="incomingPicks"></div>
+            </div>
+            <div>
+              <div class="draft-section-title">Outgoing</div>
+              <div class="draft-list" id="outgoingPicks"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="content-grid bottom">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">League Rank</p>
+                <h3>チーム順位</h3>
+              </div>
+            </div>
+            <div id="teamRankings" class="ranking-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Leaders</p>
+                <h3>リーグリーダー</h3>
+              </div>
+            </div>
+            <div id="leagueLeaders" class="leader-grid"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
