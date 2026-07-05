@@ -11,6 +11,8 @@ const state = {
   contracts: null,
   draftPicks: null,
   refreshToken: "",
+  refreshMode: false,
+  lastFetchMessage: "",
   warnings: []
 };
 
@@ -144,7 +146,7 @@ function setLoading(message) {
 }
 
 function setReady() {
-  elements.fetchStatus.textContent = state.warnings.length ? "一部取得エラー" : "取得完了";
+  elements.fetchStatus.textContent = state.warnings.length ? "一部取得エラー" : state.lastFetchMessage || "取得完了";
   elements.fetchStatus.className = state.warnings.length ? "warning" : "";
   elements.refreshBtn.disabled = false;
 }
@@ -463,6 +465,9 @@ function renderStatus() {
   if (state.warnings.length) {
     elements.fetchStatus.textContent = "一部取得エラー";
     elements.fetchStatus.className = "warning";
+  } else if (state.lastFetchMessage) {
+    elements.fetchStatus.textContent = state.lastFetchMessage;
+    elements.fetchStatus.className = "";
   }
 }
 
@@ -551,6 +556,11 @@ async function loadTeamDetails() {
   state.draftPicks = draftResult.draftPicks || null;
   const playerInfoWarnings = await loadSalaryPlayerInfo();
   state.warnings = [...state.warnings, ...(rosterResult.warnings || []), ...(salaryResult.warnings || []), ...(draftResult.warnings || []), ...playerInfoWarnings];
+  if (!state.warnings.length) {
+    state.lastFetchMessage = state.refreshMode
+      ? "Webから最新取得しました"
+      : "取得完了";
+  }
   render();
   setReady();
 }
@@ -560,6 +570,8 @@ elements.refreshBtn.addEventListener("click", async () => {
   state.contracts = null;
   state.draftPicks = null;
   state.refreshToken = String(Date.now());
+  state.refreshMode = true;
+  state.lastFetchMessage = "";
   state.warnings = [];
   try {
     await loadBootstrap();
@@ -569,6 +581,7 @@ elements.refreshBtn.addEventListener("click", async () => {
     setReady();
   } finally {
     state.refreshToken = "";
+    state.refreshMode = false;
   }
 });
 
