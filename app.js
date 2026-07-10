@@ -10,6 +10,8 @@ const state = {
   roster: [],
   contracts: null,
   draftPicks: null,
+  playerCards: {},
+  selectedPlayerKey: "",
   refreshToken: "",
   refreshMode: false,
   lastFetchMessage: "",
@@ -44,6 +46,9 @@ const elements = {
   draftSummary: document.querySelector("#draftSummary"),
   incomingPicks: document.querySelector("#incomingPicks"),
   outgoingPicks: document.querySelector("#outgoingPicks"),
+  playerOverlay: document.querySelector("#playerOverlay"),
+  playerDetails: document.querySelector("#playerDetails"),
+  playerClose: document.querySelector("#playerClose"),
   teamRankings: document.querySelector("#teamRankings"),
   leagueLeaders: document.querySelector("#leagueLeaders")
 };
@@ -77,6 +82,11 @@ function pct(value) {
 function num(value) {
   if (value === null || value === undefined || value === "") return "-";
   return formatNumber.format(Number(value));
+}
+
+function statValue(value, suffix = "") {
+  const text = suffix === "%" ? pct(value) : num(value);
+  return text === "-" ? "-" : `${text}${suffix && suffix !== "%" ? suffix : ""}`;
 }
 
 function selectedTeam() {
@@ -191,6 +201,7 @@ function renderTeamList() {
       state.roster = [];
       state.contracts = null;
       state.draftPicks = null;
+      closePlayerDetails();
       render();
       await loadTeamDetails();
     });
@@ -241,6 +252,7 @@ function renderRoster() {
     ? salaryRows.map((contract) => resolveSalaryPlayer(contract))
     : teamPlayers().map((player) => ({ playerId: player.playerId, player: player.player, position: "-", age: player.age, exp: "-", school: player.team }));
 
+  state.playerCards = {};
   elements.rosterCount.textContent = salaryRows.length ? `${rows.length} salary players` : `${rows.length} players`;
   elements.rosterTable.innerHTML = rows
     .map((player) => {
@@ -250,8 +262,19 @@ function renderRoster() {
       const salaryNote = player.salary ? ` / ${moneyShort(player.salary)}` : "";
       const position = player.position || player.POSITION || "-";
       const exp = player.exp || player.seasonExp || player.SEASON_EXP;
+      const playerKey = String(player.playerId || stats.playerId || normalizeName(player.player));
+      state.playerCards[playerKey] = {
+        ...player,
+        key: playerKey,
+        photo,
+        position,
+        exp,
+        stats,
+        statNote,
+        salaryNote
+      };
       return `
-        <tr>
+        <tr class="player-row" data-player-key="${playerKey}" tabindex="0" aria-label="${player.player}の詳細を表示">
           <td>
             <span class="player-cell">
               <span class="headshot" data-fallback="${initials(player.player)}">
@@ -274,6 +297,84 @@ function renderRoster() {
       `;
     })
     .join("");
+
+  elements.rosterTable.querySelectorAll(".player-row").forEach((row) => {
+    row.addEventListener("click", () => openPlayerDetails(row.dataset.playerKey));
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openPlayerDetails(row.dataset.playerKey);
+      }
+    });
+  });
+}
+
+function openPlayerDetails(playerKey) {
+  state.selectedPlayerKey = playerKey;
+  renderPlayerDetails();
+}
+
+function closePlayerDetails() {
+  state.selectedPlayerKey = "";
+  if (elements.playerOverlay) elements.playerOverlay.hidden = true;
+}
+
+function renderPlayerDetails() {
+  const player = state.playerCards[state.selectedPlayerKey];
+  if (!player || !elements.playerOverlay) {
+    if (elements.playerOverlay) elements.playerOverlay.hidden = true;
+    return;
+  }
+
+  const stats = player.stats || {};
+  const hasStats = Boolean(stats.player);
+  const exp = player.exp === 0 ? "R" : player.exp || "-";
+  const metrics = [
+    ["GP", stats.gp],
+    ["MIN", stats.min],
+    ["PTS", stats.pts],
+    ["REB", stats.reb],
+    ["AST", stats.ast],
+    ["STL", stats.stl],
+    ["BLK", stats.blk],
+    ["FG%", stats.fgPct, "%"],
+    ["3P%", stats.fg3Pct, "%"],
+    ["FT%", stats.ftPct, "%"],
+    ["+/-", stats.plusMinus]
+  ];
+
+  elements.playerDetails.innerHTML = `
+    <div class="player-detail-head">
+      <span class="detail-headshot" data-fallback="${initials(player.player)}">
+        ${player.photo ? `<img src="${player.photo}" alt="${player.player}" onerror="this.remove(); this.parentElement.dataset.fallback='${initials(player.player)}';" />` : ""}
+      </span>
+      <div>
+        <p class="eyebrow">${stats.team || selectedTeam()?.abbr || "NBA"} / ${elements.statsSeason.value}</p>
+        <h3>${player.player}</h3>
+        <div class="player-detail-meta">
+          <span>${player.position || "-"}</span>
+          <span>Age ${player.age || stats.age || "-"}</span>
+          <span>EXP ${exp}</span>
+          ${player.salary ? `<span>${moneyShort(player.salary)}</span>` : ""}
+        </div>
+      </div>
+    </div>
+    ${hasStats ? `
+      <div class="player-stat-grid">
+        ${metrics.map(([label, value, suffix]) => `
+          <div>
+            <span>${label}</span>
+            <strong>${statValue(value, suffix)}</strong>
+          </div>
+        `).join("")}
+      </div>
+    ` : '<div class="player-detail-empty">この年度のNBA主要スタッツは見つかりませんでした。</div>'}
+    <div class="player-detail-foot">
+      <span>${player.school || player.country || ""}</span>
+      <span>${player.contract || player.guaranteed || ""}</span>
+    </div>
+  `;
+  elements.playerOverlay.hidden = false;
 }
 
 function capStatus(total, cap) {
@@ -548,6 +649,7 @@ function render() {
   renderHero();
   renderKpis();
   renderRoster();
+  renderPlayerDetails();
   renderSalary();
   renderSalaryMatrix();
   renderDraftPicks();
@@ -642,6 +744,7 @@ elements.refreshBtn.addEventListener("click", async () => {
   state.roster = [];
   state.contracts = null;
   state.draftPicks = null;
+  closePlayerDetails();
   state.refreshToken = String(Date.now());
   state.refreshMode = true;
   state.lastFetchMessage = "";
@@ -664,7 +767,18 @@ elements.searchInput.addEventListener("input", (event) => {
 });
 
 [elements.statsSeason, elements.salarySeason, elements.seasonType].forEach((select) => {
-  select.addEventListener("change", () => elements.refreshBtn.click());
+  select.addEventListener("change", () => {
+    closePlayerDetails();
+    elements.refreshBtn.click();
+  });
+});
+
+elements.playerClose.addEventListener("click", closePlayerDetails);
+elements.playerOverlay.addEventListener("click", (event) => {
+  if (event.target === elements.playerOverlay) closePlayerDetails();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.playerOverlay.hidden) closePlayerDetails();
 });
 
 loadBootstrap()
