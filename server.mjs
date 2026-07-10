@@ -85,7 +85,41 @@ const sourceLinks = {
   nbaTeams: "https://www.nba.com/teams",
   basketballReference: "https://www.basketball-reference.com/contracts/",
   hoopshype: "https://hoopshype.com/salaries/",
+  salarySwish: "https://www.salaryswish.com/",
   fanspoDraftPicks: "https://fanspo.com/nba/teams"
+};
+
+const salarySwishTeams = {
+  ATL: "hawks",
+  BOS: "celtics",
+  BKN: "nets",
+  CHA: "hornets",
+  CHI: "bulls",
+  CLE: "cavaliers",
+  DAL: "mavericks",
+  DEN: "nuggets",
+  DET: "pistons",
+  GSW: "warriors",
+  HOU: "rockets",
+  IND: "pacers",
+  LAC: "clippers",
+  LAL: "lakers",
+  MEM: "grizzlies",
+  MIA: "heat",
+  MIL: "bucks",
+  MIN: "timberwolves",
+  NOP: "pelicans",
+  NYK: "knicks",
+  OKC: "thunder",
+  ORL: "magic",
+  PHI: "sixers",
+  PHX: "suns",
+  POR: "trailblazers",
+  SAC: "kings",
+  SAS: "spurs",
+  TOR: "raptors",
+  UTA: "jazz",
+  WAS: "wizards"
 };
 
 const fanspoTeams = {
@@ -159,9 +193,31 @@ function htmlDecode(value = "") {
     .replace(/&amp;/g, "&")
     .replace(/&nbsp;/g, " ")
     .replace(/&#39;/g, "'")
+    .replace(/&#039;/g, "'")
     .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
     .replace(/<[^>]*>/g, "")
     .trim();
+}
+
+function extractAttr(html, attr) {
+  const match = html.match(new RegExp(`${attr}=["']([^"']*)["']`, "i"));
+  return match ? htmlDecode(match[1]) : "";
+}
+
+function seasonLabel(start) {
+  return `${start}/${String(start + 1).slice(-2)}`;
+}
+
+function optionLabels(season) {
+  return [
+    season?.teamOption ? "Team option" : "",
+    season?.playerOption ? "Player option" : "",
+    season?.qualifyingOffer ? "Qualifying offer" : "",
+    season?.twoWayContract ? "Two-way" : ""
+  ].filter(Boolean);
 }
 
 function tableRows(resultSet) {
@@ -344,6 +400,8 @@ function parseContracts(html, salarySeason) {
   const seasonHeader = headers.find((header) => header.label === salarySeason);
   const salaryStat = seasonHeader?.stat || headers.find((header) => /^\d{4}-\d{2}$/.test(header.label))?.stat || "y1";
   const salaryLabel = seasonHeader?.label || headers.find((header) => header.stat === salaryStat)?.label || salarySeason;
+  const targetSeason = salarySeasonStart(salarySeason);
+  const seasonHeaders = headers.filter((header) => /^\d{4}-\d{2}$/.test(header.label));
 
   const rows = [...table.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)]
     .map((rowMatch) => rowMatch[1])
@@ -353,13 +411,27 @@ function parseContracts(html, salarySeason) {
       for (const cellMatch of row.matchAll(/<(?:td|th)[^>]+data-stat="([^"]+)"[^>]*>([\s\S]*?)<\/(?:td|th)>/gi)) {
         cells[cellMatch[1]] = htmlDecode(cellMatch[2]);
       }
+      const seasons = seasonHeaders
+        .map((header) => {
+          const start = salarySeasonStart(header.label);
+          const salary = moneyToNumber(cells[header.stat]);
+          return {
+            season: start,
+            label: seasonLabel(start),
+            salary,
+            salaryText: salary ? formatServerMoney(salary) : "-",
+            notes: ""
+          };
+        })
+        .filter((season) => season.season >= targetSeason && season.salary > 0);
       return {
         player: cells.player,
         age: cells.age,
         salary: moneyToNumber(cells[salaryStat]),
         salaryText: cells[salaryStat] || "-",
         guaranteed: cells.guaranteed || "",
-        contract: cells.contract || ""
+        contract: cells.contract || "",
+        seasons
       };
     })
     .filter((row) => row.player && row.player !== "Team Totals");
@@ -368,7 +440,8 @@ function parseContracts(html, salarySeason) {
   return {
     rows: rows.sort((a, b) => b.salary - a.salary),
     total,
-    salaryColumn: salaryLabel
+    salaryColumn: salaryLabel,
+    salaryYears: [...new Set(rows.flatMap((row) => row.seasons.map((season) => season.season)))].sort((a, b) => a - b)
   };
 }
 
@@ -396,28 +469,42 @@ function parseHoopsHypeContracts(html, salarySeason) {
         const targetSeason = salarySeasonStart(salarySeason);
         const rows = contracts
           .map((contract) => {
-            const season = contract.seasons?.find((item) => Number(item.season) === targetSeason);
+            const seasons = (contract.seasons || [])
+              .map((item) => {
+                const start = Number(item?.season);
+                const salary = Number(item?.salary || 0);
+                const flags = optionLabels(item);
+                return {
+                  season: start,
+                  label: seasonLabel(start),
+                  salary,
+                  salaryText: salary ? formatServerMoney(salary) : "-",
+                  capAllocation: Number(item?.capAllocation || 0),
+                  notes: item?.notes || "",
+                  flags
+                };
+              })
+              .filter((item) => Number.isFinite(item.season) && item.season >= targetSeason && item.salary > 0)
+              .sort((a, b) => a.season - b.season);
+            const season = seasons.find((item) => Number(item.season) === targetSeason);
             return {
               player: contract.playerName,
               age: "",
               salary: Number(season?.salary || 0),
               salaryText: season?.salary ? formatServerMoney(season.salary) : "-",
               guaranteed: season?.notes || "",
-              contract: [
-                season?.teamOption ? "Team option" : "",
-                season?.playerOption ? "Player option" : "",
-                season?.qualifyingOffer ? "Qualifying offer" : "",
-                season?.twoWayContract ? "Two-way" : ""
-              ].filter(Boolean).join(", "),
-              updatedAt: contract.updateDate
+              contract: season?.flags?.join(", ") || "",
+              updatedAt: contract.updateDate,
+              seasons
             };
           })
-          .filter((row) => row.player && row.salary > 0)
+          .filter((row) => row.player && row.seasons.length)
           .sort((a, b) => b.salary - a.salary);
         return {
           rows,
           total: rows.reduce((sum, player) => sum + player.salary, 0),
-          salaryColumn: `${targetSeason}/${String(targetSeason + 1).slice(-2)}`
+          salaryColumn: seasonLabel(targetSeason),
+          salaryYears: [...new Set(rows.flatMap((row) => row.seasons.map((season) => season.season)))].sort((a, b) => a - b)
         };
       }
     }
@@ -432,6 +519,7 @@ function parseHoopsHypeContracts(html, salarySeason) {
   const headers = rawHeaders.map((label) => label.replace(/\s+/g, " ").trim());
   const seasonLabels = headers.filter((label) => /^\d{4}\/\d{2}$/.test(label));
   const targetLabel = normalizeSalarySeason(salarySeason);
+  const targetSeason = salarySeasonStart(salarySeason);
   const seasonIndex = Math.max(0, seasonLabels.indexOf(targetLabel));
 
   const rows = [...table.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)]
@@ -441,13 +529,27 @@ function parseHoopsHypeContracts(html, salarySeason) {
       if (cells.length < 2) return null;
       const player = cells[0].replace(/\s+/g, " ").trim();
       const salaryText = cells[seasonIndex + 1] || cells[1] || "-";
+      const seasons = seasonLabels
+        .map((label, index) => {
+          const start = salarySeasonStart(label);
+          const salary = moneyToNumber(cells[index + 1]);
+          return {
+            season: start,
+            label,
+            salary,
+            salaryText: salary ? formatServerMoney(salary) : "-",
+            notes: ""
+          };
+        })
+        .filter((season) => season.season >= targetSeason && season.salary > 0);
       return {
         player,
         age: "",
         salary: moneyToNumber(salaryText),
         salaryText,
         guaranteed: "",
-        contract: ""
+        contract: "",
+        seasons
       };
     })
     .filter((row) => row?.player && row.player !== "Player");
@@ -459,7 +561,8 @@ function parseHoopsHypeContracts(html, salarySeason) {
   return {
     rows: playerRows.sort((a, b) => b.salary - a.salary),
     total,
-    salaryColumn: seasonLabels[seasonIndex] || targetLabel
+    salaryColumn: seasonLabels[seasonIndex] || targetLabel,
+    salaryYears: [...new Set(playerRows.flatMap((row) => row.seasons.map((season) => season.season)))].sort((a, b) => a - b)
   };
 }
 
@@ -580,7 +683,97 @@ function parseDraftPicks(html) {
   };
 }
 
-async function getDraftPicks(team) {
+function normalizeTeamName(value = "") {
+  return value.replace(/^LA Clippers$/, "Los Angeles Clippers").trim();
+}
+
+function parseSalarySwishDraftPicks(html, team) {
+  const table = html.match(/<table[^>]+id="sw_teamProfile__draftTable"[\s\S]*?<\/table>/i)?.[0];
+  if (!table) throw new Error("SalarySwish draft table was not found.");
+
+  const headers = [...table.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/gi)]
+    .map((match) => htmlDecode(match[1]))
+    .filter(Boolean);
+  const years = headers.slice(1).map((header) => Number(header)).filter(Number.isFinite);
+  const rows = [...table.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => match[1]);
+  const incoming = [];
+  const outgoing = [];
+  const ownTeamName = normalizeTeamName(team.name);
+
+  for (const row of rows) {
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((match) => match[1]);
+    const round = Number(htmlDecode(cells[0] || "").match(/[12]/)?.[0]);
+    if (!round) continue;
+
+    for (let cellIndex = 1; cellIndex < cells.length; cellIndex += 1) {
+      const year = years[cellIndex - 1];
+      const cell = cells[cellIndex] || "";
+      const images = [...cell.matchAll(/<img\b[^>]*alt=["']Logo of the ([^"']+)["'][^>]*>/gi)];
+      let previousEnd = 0;
+
+      images.forEach((imageMatch, imageIndex) => {
+        const segment = cell.slice(previousEnd, imageMatch.index);
+        const afterImage = cell.slice(imageMatch.index, images[imageIndex + 1]?.index || cell.length);
+        previousEnd = imageMatch.index + imageMatch[0].length;
+
+        const titleMatches = [...segment.matchAll(/title=["']([^"']*)["']/gi)];
+        const rawTitle = titleMatches.at(-1)?.[1] || "";
+        const title = htmlDecode(rawTitle).replace(/\s*click to view full details\.?/i, "").replace(/\s*Click to view full trade details\.?/i, "").trim();
+        const hrefMatches = [...segment.matchAll(/href=["']([^"']*)["']/gi)];
+        const href = hrefMatches.at(-1)?.[1] || "";
+        const pickTeam = normalizeTeamName(htmlDecode(imageMatch[1]));
+        const traded = /d_pick_traded/.test(segment);
+        const conditional = /condit|inContention/i.test(segment + afterImage);
+        const direction = traded ? "outgoing" : "incoming";
+        const counterparty = traded
+          ? `${pickTeam} pick`
+          : pickTeam === ownTeamName
+            ? "Own pick"
+            : `${pickTeam} pick`;
+        const protections = [
+          title || (traded ? "Traded away" : "Currently retained"),
+          conditional && !/contention|condition/i.test(title) ? "Conditional / unresolved" : ""
+        ].filter(Boolean).join(" ");
+        const pick = {
+          year,
+          round,
+          counterparty,
+          direction,
+          protections,
+          url: href ? `https://www.salaryswish.com${href}` : ""
+        };
+
+        if (traded) outgoing.push(pick);
+        else incoming.push(pick);
+      });
+    }
+  }
+
+  return {
+    incoming,
+    outgoing,
+    summary: {
+      incomingFirsts: incoming.filter((pick) => pick.round === 1).length,
+      incomingSeconds: incoming.filter((pick) => pick.round === 2).length,
+      outgoingFirsts: outgoing.filter((pick) => pick.round === 1).length,
+      outgoingSeconds: outgoing.filter((pick) => pick.round === 2).length
+    }
+  };
+}
+
+async function getSalarySwishDraftPicks(team) {
+  const slug = salarySwishTeams[team.abbr];
+  if (!slug) throw new Error("SalarySwish team mapping was not found.");
+  const url = `https://www.salaryswish.com/teams/${slug}`;
+  const html = await fetchText(url, {
+    Accept: "text/html,application/xhtml+xml",
+    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+  });
+  return { ...parseSalarySwishDraftPicks(html, team), url, provider: "SalarySwish" };
+}
+
+async function getFanspoDraftPicks(team) {
   const fanspoTeam = fanspoTeams[team.abbr];
   if (!fanspoTeam) throw new Error("Fanspo team mapping was not found.");
   const url = `https://fanspo.com/nba/teams/${fanspoTeam}/draft-picks`;
@@ -590,6 +783,23 @@ async function getDraftPicks(team) {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
   });
   return { ...parseDraftPicks(html), url, provider: "Fanspo" };
+}
+
+async function getDraftPicks(team) {
+  const errors = [];
+  try {
+    return await getSalarySwishDraftPicks(team);
+  } catch (error) {
+    errors.push(`SalarySwish: ${error.message}`);
+  }
+
+  try {
+    return await getFanspoDraftPicks(team);
+  } catch (error) {
+    errors.push(`Fanspo: ${error.message}`);
+  }
+
+  throw new Error(errors.join(" / "));
 }
 
 function getFallbackDashboard(statsSeason, salarySeason, seasonType, warning) {
@@ -709,8 +919,8 @@ async function serveApi(req, res, url) {
           incoming: [],
           outgoing: [],
           summary: { incomingFirsts: 0, incomingSeconds: 0, outgoingFirsts: 0, outgoingSeconds: 0 },
-          url: fanspoTeams[team.abbr] ? `https://fanspo.com/nba/teams/${fanspoTeams[team.abbr]}/draft-picks` : "https://fanspo.com/nba/teams",
-          provider: "Fanspo"
+          url: salarySwishTeams[team.abbr] ? `https://www.salaryswish.com/teams/${salarySwishTeams[team.abbr]}` : "https://www.salaryswish.com/",
+          provider: "SalarySwish"
         },
         generatedAt: new Date().toISOString(),
         warnings: [`ドラフト指名権取得に失敗しました: ${error.message}`]

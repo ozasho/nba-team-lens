@@ -324,6 +324,10 @@ a {
   margin-top: 18px;
 }
 
+.salary-years-panel {
+  margin-top: 18px;
+}
+
 .panel-link {
   display: inline-flex;
   align-items: center;
@@ -430,6 +434,60 @@ a {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.draft-pick a {
+  display: inline-flex;
+  margin-top: 7px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.salary-years-wrap {
+  overflow-x: auto;
+  padding: 0 18px 18px;
+}
+
+.salary-years-empty {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  color: var(--muted);
+  padding: 14px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.salary-years-table {
+  min-width: 920px;
+}
+
+.salary-years-table th,
+.salary-years-table td {
+  white-space: nowrap;
+}
+
+.salary-years-table td:first-child,
+.salary-years-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 190px;
+  background: var(--surface);
+}
+
+.salary-years-table td small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.salary-years-table tfoot td {
+  border-top: 1px solid var(--line);
+  background: #fbfcfd;
+  font-weight: 900;
 }
 
 .content-grid.bottom {

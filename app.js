@@ -39,6 +39,7 @@ const elements = {
   capTrack: document.querySelector("#capTrack"),
   capLegend: document.querySelector("#capLegend"),
   salaryList: document.querySelector("#salaryList"),
+  salaryMatrix: document.querySelector("#salaryMatrix"),
   draftLink: document.querySelector("#draftLink"),
   draftSummary: document.querySelector("#draftSummary"),
   incomingPicks: document.querySelector("#incomingPicks"),
@@ -57,6 +58,15 @@ const formatMoney = new Intl.NumberFormat("en-US", {
 function moneyShort(value) {
   if (!value) return "$0";
   return `$${formatNumber.format(value / 1_000_000)}M`;
+}
+
+function salarySeasonStart(value) {
+  const year = Number(String(value).slice(0, 4));
+  return Number.isFinite(year) ? year : new Date().getFullYear();
+}
+
+function salarySeasonLabel(start) {
+  return `${start}/${String(start + 1).slice(-2)}`;
 }
 
 function pct(value) {
@@ -386,6 +396,65 @@ function renderSalary() {
     : '<div class="salary-row"><span><strong>契約表を取得できませんでした</strong><small>Basketball-Reference 側の制限や年度列の未公開が考えられます。</small></span></div>';
 }
 
+function renderSalaryMatrix() {
+  const rows = state.contracts?.rows || [];
+  const targetSeason = salarySeasonStart(elements.salarySeason.value);
+  const years = (state.contracts?.salaryYears || [])
+    .map(Number)
+    .filter((year) => Number.isFinite(year) && year >= targetSeason)
+    .sort((a, b) => a - b);
+
+  if (!rows.length || !years.length) {
+    elements.salaryMatrix.innerHTML = '<div class="salary-years-empty">契約年度別のサラリーを取得できませんでした。</div>';
+    return;
+  }
+
+  const totalByYear = Object.fromEntries(years.map((year) => [year, 0]));
+  rows.forEach((row) => {
+    years.forEach((year) => {
+      const season = row.seasons?.find((item) => Number(item.season) === year);
+      totalByYear[year] += Number(season?.salary || 0);
+    });
+  });
+
+  elements.salaryMatrix.innerHTML = `
+    <table class="salary-years-table">
+      <thead>
+        <tr>
+          <th>Player</th>
+          ${years.map((year) => `<th>${salarySeasonLabel(year)}</th>`).join("")}
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((row) => `
+          <tr>
+            <td>
+              <strong>${row.player}</strong>
+              <small>${row.contract || row.guaranteed || ""}</small>
+            </td>
+            ${years.map((year) => {
+              const season = row.seasons?.find((item) => Number(item.season) === year);
+              const flags = season?.flags?.length ? season.flags.join(" / ") : season?.notes || "";
+              return `
+                <td>
+                  <strong>${season?.salary ? formatMoney.format(season.salary) : "-"}</strong>
+                  ${flags ? `<small>${flags}</small>` : ""}
+                </td>
+              `;
+            }).join("")}
+          </tr>
+        `).join("")}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td>Total</td>
+          ${years.map((year) => `<td><strong>${formatMoney.format(totalByYear[year] || 0)}</strong></td>`).join("")}
+        </tr>
+      </tfoot>
+    </table>
+  `;
+}
+
 function renderDraftPickList(picks, emptyText) {
   if (!picks?.length) {
     return `<div class="draft-empty">${emptyText}</div>`;
@@ -393,13 +462,14 @@ function renderDraftPickList(picks, emptyText) {
   return picks
     .map((pick) => `
       <article class="draft-pick ${pick.direction}">
-        <div class="draft-chip">${pick.year} R${pick.round}</div>
-        <div>
-          <strong>${pick.counterparty}</strong>
-          <p>${pick.protections || "No protections listed"}</p>
-        </div>
-      </article>
-    `)
+          <div class="draft-chip">${pick.year} R${pick.round}</div>
+          <div>
+            <strong>${pick.counterparty}</strong>
+            <p>${pick.protections || "No protections listed"}</p>
+            ${pick.url ? `<a href="${pick.url}" target="_blank" rel="noreferrer">Details</a>` : ""}
+          </div>
+        </article>
+      `)
     .join("");
 }
 
@@ -408,17 +478,19 @@ function renderDraftPicks() {
     incoming: [],
     outgoing: [],
     summary: { incomingFirsts: 0, incomingSeconds: 0, outgoingFirsts: 0, outgoingSeconds: 0 },
-    url: "https://fanspo.com/nba/teams"
+    url: "https://www.salaryswish.com/",
+    provider: "Source"
   };
   const summary = draftPicks.summary || {};
-  elements.draftLink.href = draftPicks.url || "https://fanspo.com/nba/teams";
+  elements.draftLink.href = draftPicks.url || "https://www.salaryswish.com/";
+  elements.draftLink.textContent = draftPicks.provider || "Source";
   elements.draftSummary.innerHTML = `
-    <div><span>Incoming 1st</span><strong>${summary.incomingFirsts || 0}</strong></div>
-    <div><span>Incoming 2nd</span><strong>${summary.incomingSeconds || 0}</strong></div>
+    <div><span>Available 1st</span><strong>${summary.incomingFirsts || 0}</strong></div>
+    <div><span>Available 2nd</span><strong>${summary.incomingSeconds || 0}</strong></div>
     <div><span>Outgoing 1st</span><strong>${summary.outgoingFirsts || 0}</strong></div>
     <div><span>Outgoing 2nd</span><strong>${summary.outgoingSeconds || 0}</strong></div>
   `;
-  elements.incomingPicks.innerHTML = renderDraftPickList(draftPicks.incoming, "Incoming picks were not found.");
+  elements.incomingPicks.innerHTML = renderDraftPickList(draftPicks.incoming, "Available picks were not found.");
   elements.outgoingPicks.innerHTML = renderDraftPickList(draftPicks.outgoing, "Outgoing picks were not found.");
 }
 
@@ -477,6 +549,7 @@ function render() {
   renderKpis();
   renderRoster();
   renderSalary();
+  renderSalaryMatrix();
   renderDraftPicks();
   renderRankings();
   renderLeaders();
