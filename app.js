@@ -6,6 +6,7 @@ const state = {
   sources: {},
   playerInfo: {},
   selectedAbbr: "LAL",
+  teamOrder: "standings",
   search: "",
   roster: [],
   contracts: null,
@@ -24,6 +25,7 @@ const elements = {
   seasonType: document.querySelector("#seasonType"),
   refreshBtn: document.querySelector("#refreshBtn"),
   searchInput: document.querySelector("#searchInput"),
+  teamOrder: document.querySelector("#teamOrder"),
   teamList: document.querySelector("#teamList"),
   teamHero: document.querySelector("#teamHero"),
   teamConference: document.querySelector("#teamConference"),
@@ -105,6 +107,49 @@ function teamPlayers() {
     .sort((a, b) => Number(b.pts || 0) - Number(a.pts || 0));
 }
 
+function teamStat(team) {
+  return state.teamStats.find((item) => Number(item.teamId) === Number(team?.teamId));
+}
+
+function sortByStanding(a, b) {
+  const aStats = teamStat(a);
+  const bStats = teamStat(b);
+  return Number(bStats?.winPct || 0) - Number(aStats?.winPct || 0)
+    || Number(bStats?.wins || 0) - Number(aStats?.wins || 0)
+    || a.name.localeCompare(b.name);
+}
+
+function conferenceRanks() {
+  const ranks = new Map();
+  ["East", "West"].forEach((conference) => {
+    state.teams
+      .filter((team) => team.conference === conference)
+      .sort(sortByStanding)
+      .forEach((team, index) => ranks.set(team.abbr, index + 1));
+  });
+  return ranks;
+}
+
+function orderedTeamList(teams) {
+  if (state.teamOrder === "abc") {
+    return teams
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((team) => ({ type: "team", team }));
+  }
+
+  return ["East", "West"].flatMap((conference) => {
+    const conferenceTeams = teams
+      .filter((team) => team.conference === conference)
+      .sort(sortByStanding);
+    if (!conferenceTeams.length) return [];
+    return [
+      { type: "header", label: conference === "East" ? "Eastern Conference" : "Western Conference" },
+      ...conferenceTeams.map((team) => ({ type: "team", team }))
+    ];
+  });
+}
+
 function playerPhoto(playerId) {
   return playerId ? `https://cdn.nba.com/headshots/nba/latest/1040x760/${playerId}.png` : "";
 }
@@ -177,11 +222,19 @@ function renderTeamList() {
     const text = `${team.name} ${team.abbr} ${team.city}`.toLowerCase();
     return !keyword || text.includes(keyword);
   });
+  const ranks = conferenceRanks();
 
-  elements.teamList.innerHTML = teams
-    .map((team) => {
-      const stats = state.teamStats.find((item) => Number(item.teamId) === Number(team.teamId));
-      const record = stats ? `${stats.wins}-${stats.losses}` : team.conference;
+  elements.teamList.innerHTML = orderedTeamList(teams)
+    .map((item) => {
+      if (item.type === "header") return `<div class="team-group-label">${item.label}</div>`;
+      const team = item.team;
+      const stats = teamStat(team);
+      const rank = ranks.get(team.abbr);
+      const record = stats
+        ? state.teamOrder === "standings"
+          ? `#${rank} ${stats.wins}-${stats.losses}`
+          : `${stats.wins}-${stats.losses}`
+        : team.conference;
       return `
         <button class="team-button ${team.abbr === state.selectedAbbr ? "active" : ""}" data-abbr="${team.abbr}" type="button">
           <span class="team-logo" style="background:${team.primary}; color:${team.secondary === "#ffffff" ? "#fff" : "#fff"}">${team.abbr}</span>
@@ -763,6 +816,11 @@ elements.refreshBtn.addEventListener("click", async () => {
 
 elements.searchInput.addEventListener("input", (event) => {
   state.search = event.target.value;
+  renderTeamList();
+});
+
+elements.teamOrder.addEventListener("change", (event) => {
+  state.teamOrder = event.target.value;
   renderTeamList();
 });
 
