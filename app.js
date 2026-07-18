@@ -12,6 +12,7 @@ const state = {
   contracts: null,
   draftPicks: null,
   playerCards: {},
+  playerHistory: {},
   selectedPlayerKey: "",
   refreshToken: "",
   refreshMode: false,
@@ -365,6 +366,7 @@ function renderRoster() {
 function openPlayerDetails(playerKey) {
   state.selectedPlayerKey = playerKey;
   renderPlayerDetails();
+  loadPlayerHistory(playerKey);
 }
 
 function closePlayerDetails() {
@@ -380,6 +382,9 @@ function renderPlayerDetails() {
   }
 
   const stats = player.stats || {};
+  const playerId = player.playerId || stats.playerId;
+  const historyKey = playerHistoryKey(playerId);
+  const historyState = state.playerHistory[historyKey] || {};
   const hasStats = Boolean(stats.player);
   const exp = player.exp === 0 ? "R" : player.exp || "-";
   const metrics = [
@@ -426,8 +431,76 @@ function renderPlayerDetails() {
       <span>${player.school || player.country || ""}</span>
       <span>${player.contract || player.guaranteed || ""}</span>
     </div>
+    ${renderPlayerHistory(historyState, Boolean(playerId))}
   `;
   elements.playerOverlay.hidden = false;
+}
+
+function playerHistoryKey(playerId) {
+  return playerId ? `${playerId}:${elements.seasonType.value}` : "";
+}
+
+function renderPlayerHistory(historyState, hasPlayerId) {
+  if (!hasPlayerId) {
+    return '<div class="player-history-section"><div class="player-detail-empty">選手IDがないため過去スタッツを取得できません。</div></div>';
+  }
+  if (historyState.loading) {
+    return '<div class="player-history-section"><div class="player-detail-empty">過去5年分のスタッツを取得中です。</div></div>';
+  }
+  if (historyState.warning) {
+    return `<div class="player-history-section"><div class="player-detail-empty">${historyState.warning}</div></div>`;
+  }
+  const rows = historyState.rows || [];
+  if (!rows.length) {
+    return '<div class="player-history-section"><div class="player-detail-empty">過去5年分のスタッツは見つかりませんでした。</div></div>';
+  }
+
+  return `
+    <div class="player-history-section">
+      <div class="player-history-head">
+        <strong>過去5シーズン</strong>
+        <span>${elements.seasonType.value} / Per Game</span>
+      </div>
+      <div class="player-history-wrap">
+        <table class="player-history-table">
+          <thead>
+            <tr>
+              <th>Season</th>
+              <th>Team</th>
+              <th>GP</th>
+              <th>MIN</th>
+              <th>PTS</th>
+              <th>REB</th>
+              <th>AST</th>
+              <th>STL</th>
+              <th>BLK</th>
+              <th>FG%</th>
+              <th>3P%</th>
+              <th>FT%</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr>
+                <td>${row.season}</td>
+                <td>${row.team || "-"}</td>
+                <td>${num(row.gp)}</td>
+                <td>${num(row.min)}</td>
+                <td>${num(row.pts)}</td>
+                <td>${num(row.reb)}</td>
+                <td>${num(row.ast)}</td>
+                <td>${num(row.stl)}</td>
+                <td>${num(row.blk)}</td>
+                <td>${pct(row.fgPct)}</td>
+                <td>${pct(row.fg3Pct)}</td>
+                <td>${pct(row.ftPct)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 function capStatus(total, cap) {
@@ -715,6 +788,37 @@ async function api(path) {
   const response = await fetch(path);
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return response.json();
+}
+
+async function loadPlayerHistory(playerKey) {
+  const player = state.playerCards[playerKey];
+  const playerId = player?.playerId || player?.stats?.playerId;
+  if (!playerId) return;
+
+  const key = playerHistoryKey(playerId);
+  if (!state.refreshToken && (state.playerHistory[key]?.rows || state.playerHistory[key]?.loading)) return;
+
+  state.playerHistory[key] = { loading: true, rows: [] };
+  if (state.selectedPlayerKey === playerKey) renderPlayerDetails();
+
+  try {
+    const query = new URLSearchParams({ seasonType: elements.seasonType.value });
+    if (state.refreshToken) query.set("refresh", state.refreshToken);
+    const result = await api(`/api/player-history/${playerId}?${query}`);
+    state.playerHistory[key] = {
+      loading: false,
+      rows: result.history || [],
+      warning: result.warnings?.[0] || ""
+    };
+  } catch (error) {
+    state.playerHistory[key] = {
+      loading: false,
+      rows: [],
+      warning: `過去スタッツ取得に失敗しました: ${error.message}`
+    };
+  }
+
+  if (state.selectedPlayerKey === playerKey) renderPlayerDetails();
 }
 
 async function loadSalaryPlayerInfo() {

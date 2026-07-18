@@ -390,6 +390,41 @@ async function getPlayerInfo(playerId) {
   };
 }
 
+function resultSetByName(data, name) {
+  return (data.resultSets || []).find((set) => set.name === name);
+}
+
+async function getPlayerHistory(playerId, seasonType) {
+  const data = await nbaStats("playercareerstats", {
+    LeagueID: "00",
+    PerMode: "PerGame",
+    PlayerID: String(playerId)
+  });
+  const setName = seasonType === "Playoffs" ? "SeasonTotalsPostSeason" : "SeasonTotalsRegularSeason";
+  const rows = tableRows(resultSetByName(data, setName))
+    .filter((row) => row.SEASON_ID)
+    .sort((a, b) => Number(String(b.SEASON_ID).slice(0, 4)) - Number(String(a.SEASON_ID).slice(0, 4)))
+    .slice(0, 5)
+    .map((row) => ({
+      playerId: row.PLAYER_ID || playerId,
+      season: row.SEASON_ID,
+      team: row.TEAM_ABBREVIATION || "-",
+      age: row.PLAYER_AGE,
+      gp: row.GP,
+      gs: row.GS,
+      min: row.MIN,
+      pts: row.PTS,
+      reb: row.REB,
+      ast: row.AST,
+      stl: row.STL,
+      blk: row.BLK,
+      fgPct: row.FG_PCT,
+      fg3Pct: row.FG3_PCT,
+      ftPct: row.FT_PCT
+    }));
+  return rows;
+}
+
 function parseContracts(html, salarySeason) {
   const withoutComments = html.replace(/<!--|-->/g, "");
   const table = withoutComments.match(/<table[^>]+id="contracts"[\s\S]*?<\/table>/i)?.[0];
@@ -875,6 +910,22 @@ async function serveApi(req, res, url) {
       json(res, 200, playerInfo);
     } catch (error) {
       json(res, 200, { playerInfo: null, generatedAt: new Date().toISOString(), warnings: [`選手詳細取得に失敗しました: ${error.message}`] });
+    }
+    return;
+  }
+
+  const playerHistoryMatch = url.pathname.match(/^\/api\/player-history\/(\d+)$/);
+  if (playerHistoryMatch) {
+    try {
+      const playerId = Number(playerHistoryMatch[1]);
+      const history = await cached(`player-history:${playerId}:${seasonType}`, async () => ({
+        history: await getPlayerHistory(playerId, seasonType),
+        generatedAt: new Date().toISOString(),
+        warnings: []
+      }), forceRefresh);
+      json(res, 200, history);
+    } catch (error) {
+      json(res, 200, { history: [], generatedAt: new Date().toISOString(), warnings: [`過去スタッツ取得に失敗しました: ${error.message}`] });
     }
     return;
   }
