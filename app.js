@@ -784,10 +784,19 @@ function render() {
   renderStatus();
 }
 
-async function api(path) {
-  const response = await fetch(path);
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  return response.json();
+async function api(path, timeoutMs = 45000) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(path, { cache: "no-store", signal: controller.signal });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return response.json();
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("通信がタイムアウトしました。再度、最新取得を押してください。");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 async function loadPlayerHistory(playerKey) {
@@ -875,23 +884,27 @@ async function loadTeamDetails() {
   const team = selectedTeam();
   if (!team) return;
   setLoading(`${team.abbr} 取得中`);
-  const query = new URLSearchParams({ salarySeason: elements.salarySeason.value });
-  if (state.refreshToken) query.set("refresh", state.refreshToken);
-  const draftQuery = state.refreshToken ? `?refresh=${state.refreshToken}` : "";
-  const [rosterResult, salaryResult, draftResult] = await Promise.all([
-    api(`/api/roster/${team.teamId}?${query}`),
-    api(`/api/salary/${team.abbr}?${query}`),
-    api(`/api/draft-picks/${team.abbr}${draftQuery}`)
-  ]);
-  state.roster = rosterResult.roster || [];
-  state.contracts = salaryResult.contracts || null;
-  state.draftPicks = draftResult.draftPicks || null;
-  const playerInfoWarnings = await loadSalaryPlayerInfo();
-  state.warnings = [...state.warnings, ...(rosterResult.warnings || []), ...(salaryResult.warnings || []), ...(draftResult.warnings || []), ...playerInfoWarnings];
-  if (!state.warnings.length) {
-    state.lastFetchMessage = state.refreshMode
-      ? "Webから最新取得しました"
-      : "取得完了";
+  try {
+    const query = new URLSearchParams({ salarySeason: elements.salarySeason.value });
+    if (state.refreshToken) query.set("refresh", state.refreshToken);
+    const draftQuery = state.refreshToken ? `?refresh=${state.refreshToken}` : "";
+    const [rosterResult, salaryResult, draftResult] = await Promise.all([
+      api(`/api/roster/${team.teamId}?${query}`),
+      api(`/api/salary/${team.abbr}?${query}`),
+      api(`/api/draft-picks/${team.abbr}${draftQuery}`)
+    ]);
+    state.roster = rosterResult.roster || [];
+    state.contracts = salaryResult.contracts || null;
+    state.draftPicks = draftResult.draftPicks || null;
+    const playerInfoWarnings = await loadSalaryPlayerInfo();
+    state.warnings = [...state.warnings, ...(rosterResult.warnings || []), ...(salaryResult.warnings || []), ...(draftResult.warnings || []), ...playerInfoWarnings];
+    if (!state.warnings.length) {
+      state.lastFetchMessage = state.refreshMode
+        ? "Webから最新取得しました"
+        : "取得完了";
+    }
+  } catch (error) {
+    state.warnings = [...state.warnings, `${team.abbr} の詳細取得に失敗しました: ${error.message}`];
   }
   render();
   setReady();
@@ -923,7 +936,7 @@ elements.searchInput.addEventListener("input", (event) => {
   renderTeamList();
 });
 
-elements.teamOrder.addEventListener("change", (event) => {
+elements.teamOrder?.addEventListener("change", (event) => {
   state.teamOrder = event.target.value;
   renderTeamList();
 });
@@ -935,12 +948,12 @@ elements.teamOrder.addEventListener("change", (event) => {
   });
 });
 
-elements.playerClose.addEventListener("click", closePlayerDetails);
-elements.playerOverlay.addEventListener("click", (event) => {
+elements.playerClose?.addEventListener("click", closePlayerDetails);
+elements.playerOverlay?.addEventListener("click", (event) => {
   if (event.target === elements.playerOverlay) closePlayerDetails();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !elements.playerOverlay.hidden) closePlayerDetails();
+  if (event.key === "Escape" && elements.playerOverlay && !elements.playerOverlay.hidden) closePlayerDetails();
 });
 
 loadBootstrap()

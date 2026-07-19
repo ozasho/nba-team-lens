@@ -236,13 +236,13 @@ async function cached(key, producer, forceRefresh = false) {
 }
 
 async function fetchJson(url, headers = {}) {
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(25000) });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return response.json();
 }
 
 async function fetchText(url, headers = {}) {
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(25000) });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return response.text();
 }
@@ -1003,7 +1003,10 @@ async function serveStatic(req, res, url) {
       ".json": "application/json; charset=utf-8",
       ".svg": "image/svg+xml"
     }[ext] || "application/octet-stream";
-    res.writeHead(200, { "Content-Type": contentType });
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      "Cache-Control": "no-store, max-age=0"
+    });
     res.end(body);
   } catch {
     res.writeHead(404);
