@@ -14,6 +14,7 @@ const state = {
   playerCards: {},
   playerHistory: {},
   selectedPlayerKey: "",
+  detailRequestId: 0,
   refreshToken: "",
   refreshMode: false,
   lastFetchMessage: "",
@@ -52,6 +53,7 @@ const elements = {
   playerOverlay: document.querySelector("#playerOverlay"),
   playerDetails: document.querySelector("#playerDetails"),
   playerClose: document.querySelector("#playerClose"),
+  toastHost: document.querySelector("#toastHost"),
   teamRankings: document.querySelector("#teamRankings"),
   leagueLeaders: document.querySelector("#leagueLeaders")
 };
@@ -799,6 +801,18 @@ async function api(path, timeoutMs = 45000) {
   }
 }
 
+function showToast(message, tone = "success") {
+  if (!elements.toastHost) return;
+  const toast = document.createElement("div");
+  toast.className = `toast ${tone}`;
+  toast.textContent = message;
+  elements.toastHost.appendChild(toast);
+  window.setTimeout(() => {
+    toast.classList.add("leaving");
+    window.setTimeout(() => toast.remove(), 220);
+  }, 4200);
+}
+
 async function loadPlayerHistory(playerKey) {
   const player = state.playerCards[playerKey];
   const playerId = player?.playerId || player?.stats?.playerId;
@@ -830,7 +844,7 @@ async function loadPlayerHistory(playerKey) {
   if (state.selectedPlayerKey === playerKey) renderPlayerDetails();
 }
 
-async function loadSalaryPlayerInfo() {
+async function loadSalaryPlayerInfo(requestId = state.detailRequestId) {
   const salaryRows = state.contracts?.rows || [];
   if (!salaryRows.length) return [];
 
@@ -844,17 +858,24 @@ async function loadSalaryPlayerInfo() {
   if (!ids.length) return [];
 
   const refresh = state.refreshToken ? `?refresh=${state.refreshToken}` : "";
-  const results = await Promise.all(ids.map((playerId) => api(`/api/player-info/${playerId}${refresh}`)));
   const warnings = [];
-  results.forEach((result, index) => {
-    if (result.playerInfo?.playerId) {
-      state.playerInfo[String(result.playerInfo.playerId)] = result.playerInfo;
+
+  for (const playerId of ids) {
+    if (requestId !== state.detailRequestId) return warnings;
+    try {
+      const result = await api(`/api/player-info/${playerId}${refresh}`, 15000);
+      if (requestId !== state.detailRequestId) return warnings;
+      if (result.playerInfo?.playerId) {
+        state.playerInfo[String(result.playerInfo.playerId)] = result.playerInfo;
+      }
+      warnings.push(...(result.warnings || []));
+      if (!result.playerInfo) {
+        warnings.push(`選手詳細を取得できませんでした: ${playerId}`);
+      }
+    } catch (error) {
+      warnings.push(`選手詳細を取得できませんでした: ${playerId} (${error.message})`);
     }
-    warnings.push(...(result.warnings || []));
-    if (!result.playerInfo && ids[index]) {
-      warnings.push(`選手詳細を取得できませんでした: ${ids[index]}`);
-    }
-  });
+  }
   return warnings;
 }
 
@@ -883,26 +904,59 @@ async function loadBootstrap() {
 async function loadTeamDetails() {
   const team = selectedTeam();
   if (!team) return;
+  const requestId = state.detailRequestId + 1;
+  state.detailRequestId = requestId;
   setLoading(`${team.abbr} 取得中`);
   try {
     const query = new URLSearchParams({ salarySeason: elements.salarySeason.value });
     if (state.refreshToken) query.set("refresh", state.refreshToken);
     const draftQuery = state.refreshToken ? `?refresh=${state.refreshToken}` : "";
-    const [rosterResult, salaryResult, draftResult] = await Promise.all([
+    const [rosterResult, salaryResult, draftResult] = await Promise.allSettled([
       api(`/api/roster/${team.teamId}?${query}`),
       api(`/api/salary/${team.abbr}?${query}`),
       api(`/api/draft-picks/${team.abbr}${draftQuery}`)
     ]);
-    state.roster = rosterResult.roster || [];
-    state.contracts = salaryResult.contracts || null;
-    state.draftPicks = draftResult.draftPicks || null;
-    const playerInfoWarnings = await loadSalaryPlayerInfo();
-    state.warnings = [...state.warnings, ...(rosterResult.warnings || []), ...(salaryResult.warnings || []), ...(draftResult.warnings || []), ...playerInfoWarnings];
+    if (requestId !== state.detailRequestId) return;
+
+    const detailWarnings = [];
+    if (rosterResult.status === "fulfilled") {
+      state.roster = rosterResult.value.roster || [];
+      detailWarnings.push(...(rosterResult.value.warnings || []));
+    } else {
+      state.roster = [];
+      detailWarnings.push(`ロスター取得に失敗しました: ${rosterResult.reason.message}`);
+    }
+
+    if (salaryResult.status === "fulfilled") {
+      state.contracts = salaryResult.value.contracts || null;
+      detailWarnings.push(...(salaryResult.value.warnings || []));
+    } else {
+      state.contracts = null;
+      detailWarnings.push(`サラリー取得に失敗しました: ${salaryResult.reason.message}`);
+    }
+
+    if (draftResult.status === "fulfilled") {
+      state.draftPicks = draftResult.value.draftPicks || null;
+      detailWarnings.push(...(draftResult.value.warnings || []));
+    } else {
+      state.draftPicks = null;
+      detailWarnings.push(`ドラフト指名権取得に失敗しました: ${draftResult.reason.message}`);
+    }
+
+    state.warnings = [...state.warnings, ...detailWarnings];
     if (!state.warnings.length) {
       state.lastFetchMessage = state.refreshMode
         ? "Webから最新取得しました"
         : "取得完了";
     }
+
+    render();
+    setReady();
+
+    loadSalaryPlayerInfo(requestId).then(() => {
+      if (requestId === state.detailRequestId) render();
+    });
+    return;
   } catch (error) {
     state.warnings = [...state.warnings, `${team.abbr} の詳細取得に失敗しました: ${error.message}`];
   }
@@ -921,10 +975,15 @@ elements.refreshBtn.addEventListener("click", async () => {
   state.warnings = [];
   try {
     await loadBootstrap();
+    showToast(
+      state.warnings.length ? "最新取得は一部失敗しました。画面の状態欄を確認してください。" : "最新情報を取得しました。",
+      state.warnings.length ? "warning" : "success"
+    );
   } catch (error) {
     state.warnings = [`取得に失敗しました: ${error.message}`];
     render();
     setReady();
+    showToast("最新取得に失敗しました。通信状況を確認して再試行してください。", "error");
   } finally {
     state.refreshToken = "";
     state.refreshMode = false;

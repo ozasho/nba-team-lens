@@ -862,19 +862,25 @@ async function serveApi(req, res, url) {
 
   if (url.pathname === "/api/bootstrap") {
     try {
-      const payload = await cached(`bootstrap:${statsSeason}:${seasonType}`, async () => ({
-        defaults,
-        teams,
-        capLines,
-        sourceLinks,
-        statsSeason,
-        salarySeason,
-        seasonType,
-        generatedAt: new Date().toISOString(),
-        warnings: [],
-        teamStats: await getTeamStats(statsSeason, seasonType),
-        playerStats: await getPlayerStats(statsSeason, seasonType)
-      }), forceRefresh);
+      const payload = await cached(`bootstrap:${statsSeason}:${seasonType}`, async () => {
+        const [teamStats, playerStats] = await Promise.all([
+          getTeamStats(statsSeason, seasonType),
+          getPlayerStats(statsSeason, seasonType)
+        ]);
+        return {
+          defaults,
+          teams,
+          capLines,
+          sourceLinks,
+          statsSeason,
+          salarySeason,
+          seasonType,
+          generatedAt: new Date().toISOString(),
+          warnings: [],
+          teamStats,
+          playerStats
+        };
+      }, forceRefresh);
       json(res, 200, { ...payload, salarySeason });
     } catch (error) {
       json(res, 200, getFallbackDashboard(statsSeason, salarySeason, seasonType, `NBA Stats の取得に失敗しました: ${error.message}`));
