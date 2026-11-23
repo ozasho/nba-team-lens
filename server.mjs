@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const CACHE_TTL = 1000 * 60 * 20;
@@ -155,17 +156,17 @@ const fanspoTeams = {
   WAS: "Wizards/30"
 };
 
-function currentDefaults() {
-  const now = new Date();
+export function currentDefaults(now = new Date()) {
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth() + 1;
-  const start = month >= 7 ? year : year - 1;
-  const activeSeason = `${start}-${String(start + 1).slice(-2)}`;
-  const statsSeason = month >= 7 ? `${start - 1}-${String(start).slice(-2)}` : activeSeason;
+  const statsStart = month >= 10 ? year : year - 1;
+  const salaryStart = month >= 7 ? year : year - 1;
   return {
-    activeSeason,
-    statsSeason,
-    salarySeason: activeSeason
+    activeSeason: seasonLabel(salaryStart, "-"),
+    statsSeason: seasonLabel(statsStart, "-"),
+    salarySeason: seasonLabel(salaryStart, "-"),
+    statsSeasons: Array.from({ length: 5 }, (_, index) => seasonLabel(statsStart - index, "-")),
+    salarySeasons: Array.from({ length: 3 }, (_, index) => seasonLabel(salaryStart - index, "-"))
   };
 }
 
@@ -207,8 +208,8 @@ function extractAttr(html, attr) {
   return match ? htmlDecode(match[1]) : "";
 }
 
-function seasonLabel(start) {
-  return `${start}/${String(start + 1).slice(-2)}`;
+function seasonLabel(start, separator = "/") {
+  return `${start}${separator}${String(start + 1).slice(-2)}`;
 }
 
 function optionLabels(season) {
@@ -233,6 +234,23 @@ async function cached(key, producer, forceRefresh = false) {
   const value = await producer();
   cache.set(key, { created: Date.now(), value });
   return value;
+}
+
+async function dashboardSection(key, getRows, forceRefresh, label) {
+  try {
+    return await cached(key, async () => {
+      const rows = await getRows();
+      if (!rows.length) throw new Error("データがありません（試合前など）");
+      return { rows, fetchedAt: new Date().toISOString() };
+    }, forceRefresh);
+  } catch (error) {
+    const previous = cache.get(key)?.value;
+    return {
+      rows: previous?.rows || [],
+      fetchedAt: previous?.fetchedAt || null,
+      warning: `${label}: ${error.message}${previous ? "（前回取得分を表示）" : ""}`
+    };
+  }
 }
 
 async function fetchJson(url, headers = {}) {
@@ -320,6 +338,29 @@ async function getTeamStats(season, seasonType) {
     ftPct: team.FT_PCT,
     plusMinus: team.PLUS_MINUS
   }));
+}
+
+async function getStandings(season) {
+  const data = await nbaStats("leaguestandingsv3", {
+    LeagueID: "00",
+    Season: season,
+    SeasonType: "Regular Season"
+  });
+  const rows = tableRows(data.resultSets?.[0] || data.resultSet);
+  if (!rows.length || rows.every((row) => row.WINS === 0 && row.LOSSES === 0)) return [];
+
+  const nbaSeasonId = `2${season.slice(0, 4)}`;
+  const byTeam = new Map(rows.map((row) => [row.TeamID, row]));
+  const standings = teams.map((team) => {
+    const row = byTeam.get(team.teamId);
+    if (String(row?.SeasonID) !== nbaSeasonId || row?.Conference !== team.conference
+        || !Number.isInteger(row.PlayoffRank) || row.PlayoffRank < 1 || row.PlayoffRank > 15
+        || !Number.isInteger(row.WINS) || !Number.isInteger(row.LOSSES) || !Number.isFinite(row.WinPCT)) {
+      throw new Error("指定年度の公式順位を確認できませんでした");
+    }
+    return { teamId: team.teamId, rank: row.PlayoffRank, wins: row.WINS, losses: row.LOSSES, winPct: row.WinPCT };
+  });
+  return standings;
 }
 
 async function getPlayerStats(season, seasonType) {
@@ -837,23 +878,7 @@ async function getDraftPicks(team) {
   throw new Error(errors.join(" / "));
 }
 
-function getFallbackDashboard(statsSeason, salarySeason, seasonType, warning) {
-  return {
-    defaults: currentDefaults(),
-    teams,
-    capLines,
-    sourceLinks,
-    statsSeason,
-    salarySeason,
-    seasonType,
-    generatedAt: new Date().toISOString(),
-    warnings: [warning],
-    teamStats: [],
-    playerStats: []
-  };
-}
-
-async function serveApi(req, res, url) {
+export async function serveApi(res, url) {
   const defaults = currentDefaults();
   const statsSeason = url.searchParams.get("statsSeason") || defaults.statsSeason;
   const salarySeason = url.searchParams.get("salarySeason") || defaults.salarySeason;
@@ -861,30 +886,26 @@ async function serveApi(req, res, url) {
   const forceRefresh = url.searchParams.has("refresh");
 
   if (url.pathname === "/api/bootstrap") {
-    try {
-      const payload = await cached(`bootstrap:${statsSeason}:${seasonType}`, async () => {
-        const [teamStats, playerStats] = await Promise.all([
-          getTeamStats(statsSeason, seasonType),
-          getPlayerStats(statsSeason, seasonType)
-        ]);
-        return {
-          defaults,
-          teams,
-          capLines,
-          sourceLinks,
-          statsSeason,
-          salarySeason,
-          seasonType,
-          generatedAt: new Date().toISOString(),
-          warnings: [],
-          teamStats,
-          playerStats
-        };
-      }, forceRefresh);
-      json(res, 200, { ...payload, salarySeason });
-    } catch (error) {
-      json(res, 200, getFallbackDashboard(statsSeason, salarySeason, seasonType, `NBA Stats の取得に失敗しました: ${error.message}`));
-    }
+    const [teamStats, playerStats, standings] = await Promise.all([
+      dashboardSection(`team-stats:${statsSeason}:${seasonType}`, () => getTeamStats(statsSeason, seasonType), forceRefresh, "チームスタッツ"),
+      dashboardSection(`player-stats:${statsSeason}:${seasonType}`, () => getPlayerStats(statsSeason, seasonType), forceRefresh, "選手スタッツ"),
+      dashboardSection(`standings:${statsSeason}`, () => getStandings(statsSeason), forceRefresh, "公式順位")
+    ]);
+    json(res, 200, {
+      defaults,
+      teams,
+      capLines,
+      sourceLinks,
+      statsSeason,
+      salarySeason,
+      seasonType,
+      generatedAt: [teamStats.fetchedAt, playerStats.fetchedAt].filter(Boolean).sort()[0] || null,
+      standingsFetchedAt: standings.fetchedAt,
+      warnings: [teamStats.warning, playerStats.warning, standings.warning].filter(Boolean),
+      teamStats: teamStats.rows,
+      playerStats: playerStats.rows,
+      standings: standings.rows
+    });
     return;
   }
 
@@ -1024,7 +1045,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
     if (url.pathname.startsWith("/api/")) {
-      await serveApi(req, res, url);
+      await serveApi(res, url);
       return;
     }
     await serveStatic(req, res, url);
@@ -1033,6 +1054,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`NBA Team Lens running at http://${HOST}:${PORT}`);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  server.listen(PORT, HOST, () => {
+    console.log(`NBA Team Lens running at http://${HOST}:${PORT}`);
+  });
+}

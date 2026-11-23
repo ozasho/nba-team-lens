@@ -258,7 +258,7 @@ a {
 
 .status-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -284,9 +284,7 @@ a {
 .status-strip strong {
   display: block;
   margin-top: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .kpi-grid {
@@ -749,6 +747,10 @@ td {
   align-items: center;
 }
 
+.ranking-list .team-group-label {
+  color: var(--muted);
+}
+
 .rank-number {
   display: grid;
   place-items: center;
@@ -771,6 +773,13 @@ td {
 
 .warning {
   color: var(--danger);
+}
+
+.fetch-warnings {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
 }
 
 .player-overlay {

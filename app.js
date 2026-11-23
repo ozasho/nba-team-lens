@@ -2,6 +2,12 @@ const state = {
   teams: [],
   teamStats: [],
   playerStats: [],
+  standingsByTeam: new Map(),
+  statsSeason: "",
+  salarySeason: "",
+  seasonType: "Regular Season",
+  statsFetchedAt: null,
+  standingsFetchedAt: null,
   capLines: {},
   sources: {},
   playerInfo: {},
@@ -15,9 +21,11 @@ const state = {
   playerHistory: {},
   selectedPlayerKey: "",
   detailRequestId: 0,
+  bootstrapLoading: false,
   refreshToken: "",
   refreshMode: false,
   lastFetchMessage: "",
+  bootstrapWarnings: [],
   warnings: []
 };
 
@@ -36,7 +44,9 @@ const elements = {
   nbaTeamLink: document.querySelector("#nbaTeamLink"),
   salaryLink: document.querySelector("#salaryLink"),
   updatedAt: document.querySelector("#updatedAt"),
+  standingsUpdatedAt: document.querySelector("#standingsUpdatedAt"),
   fetchStatus: document.querySelector("#fetchStatus"),
+  fetchWarnings: document.querySelector("#fetchWarnings"),
   kpiGrid: document.querySelector("#kpiGrid"),
   rosterCount: document.querySelector("#rosterCount"),
   rosterTable: document.querySelector("#rosterTable"),
@@ -55,6 +65,7 @@ const elements = {
   playerClose: document.querySelector("#playerClose"),
   toastHost: document.querySelector("#toastHost"),
   teamRankings: document.querySelector("#teamRankings"),
+  rankingsSeason: document.querySelector("#rankingsSeason"),
   leagueLeaders: document.querySelector("#leagueLeaders")
 };
 
@@ -110,27 +121,8 @@ function teamPlayers() {
     .sort((a, b) => Number(b.pts || 0) - Number(a.pts || 0));
 }
 
-function teamStat(team) {
-  return state.teamStats.find((item) => Number(item.teamId) === Number(team?.teamId));
-}
-
-function sortByStanding(a, b) {
-  const aStats = teamStat(a);
-  const bStats = teamStat(b);
-  return Number(bStats?.winPct || 0) - Number(aStats?.winPct || 0)
-    || Number(bStats?.wins || 0) - Number(aStats?.wins || 0)
-    || a.name.localeCompare(b.name);
-}
-
-function conferenceRanks() {
-  const ranks = new Map();
-  ["East", "West"].forEach((conference) => {
-    state.teams
-      .filter((team) => team.conference === conference)
-      .sort(sortByStanding)
-      .forEach((team, index) => ranks.set(team.abbr, index + 1));
-  });
-  return ranks;
+function standingFor(team) {
+  return state.standingsByTeam.get(team.teamId);
 }
 
 function orderedTeamList(teams) {
@@ -144,7 +136,8 @@ function orderedTeamList(teams) {
   return ["East", "West"].flatMap((conference) => {
     const conferenceTeams = teams
       .filter((team) => team.conference === conference)
-      .sort(sortByStanding);
+      .sort((a, b) => (standingFor(a)?.rank ?? Infinity) - (standingFor(b)?.rank ?? Infinity)
+        || a.name.localeCompare(b.name));
     if (!conferenceTeams.length) return [];
     return [
       { type: "header", label: conference === "East" ? "Eastern Conference" : "Western Conference" },
@@ -210,13 +203,20 @@ function topLeague(metric, label) {
 
 function setLoading(message) {
   elements.fetchStatus.textContent = message;
+  elements.fetchStatus.className = "";
   elements.refreshBtn.disabled = true;
+  elements.statsSeason.disabled = true;
+  elements.salarySeason.disabled = true;
+  elements.seasonType.disabled = true;
 }
 
 function setReady() {
   elements.fetchStatus.textContent = state.warnings.length ? "一部取得エラー" : state.lastFetchMessage || "取得完了";
   elements.fetchStatus.className = state.warnings.length ? "warning" : "";
   elements.refreshBtn.disabled = false;
+  elements.statsSeason.disabled = !elements.statsSeason.options.length;
+  elements.salarySeason.disabled = !elements.salarySeason.options.length;
+  elements.seasonType.disabled = false;
 }
 
 function renderTeamList() {
@@ -225,18 +225,15 @@ function renderTeamList() {
     const text = `${team.name} ${team.abbr} ${team.city}`.toLowerCase();
     return !keyword || text.includes(keyword);
   });
-  const ranks = conferenceRanks();
-
   elements.teamList.innerHTML = orderedTeamList(teams)
     .map((item) => {
       if (item.type === "header") return `<div class="team-group-label">${item.label}</div>`;
       const team = item.team;
-      const stats = teamStat(team);
-      const rank = ranks.get(team.abbr);
-      const record = stats
+      const standing = standingFor(team);
+      const record = standing
         ? state.teamOrder === "standings"
-          ? `#${rank} ${stats.wins}-${stats.losses}`
-          : `${stats.wins}-${stats.losses}`
+          ? `#${standing.rank} ${standing.wins}-${standing.losses}`
+          : `${standing.wins}-${standing.losses}`
         : team.conference;
       return `
         <button class="team-button ${team.abbr === state.selectedAbbr ? "active" : ""}" data-abbr="${team.abbr}" type="button">
@@ -253,6 +250,7 @@ function renderTeamList() {
 
   elements.teamList.querySelectorAll("button").forEach((button) => {
     button.addEventListener("click", async () => {
+      if (state.bootstrapLoading) return;
       state.selectedAbbr = button.dataset.abbr;
       state.roster = [];
       state.contracts = null;
@@ -724,21 +722,32 @@ function renderDraftPicks() {
 }
 
 function renderRankings() {
-  const sorted = [...state.teamStats]
-    .sort((a, b) => Number(b.winPct || 0) - Number(a.winPct || 0))
-    .slice(0, 10);
-  elements.teamRankings.innerHTML = sorted
-    .map((team, index) => `
+  elements.rankingsSeason.textContent = state.statsSeason ? `${state.statsSeason} / Regular Season` : "Regular Season";
+  if (!state.standingsByTeam.size) {
+    elements.teamRankings.textContent = state.statsSeason ? "公式順位を表示できません。" : "";
+    return;
+  }
+  elements.teamRankings.innerHTML = ["East", "West"].flatMap((conference) => {
+    const ranked = state.teams
+      .filter((team) => team.conference === conference && standingFor(team)?.rank <= 5)
+      .sort((a, b) => standingFor(a).rank - standingFor(b).rank);
+    return [
+      `<div class="team-group-label">${conference === "East" ? "Eastern Conference" : "Western Conference"}</div>`,
+      ...ranked.map((team) => {
+        const { rank, wins, losses, winPct } = standingFor(team);
+        return `
       <div class="ranking-row">
-        <span class="rank-number">${index + 1}</span>
+        <span class="rank-number">${rank}</span>
         <span>
-          <strong>${team.team}</strong>
-          <small>${team.wins}-${team.losses}</small>
+          <strong>${team.name}</strong>
+          <small>${wins}-${losses}</small>
         </span>
-        <strong>${pct(team.winPct)}</strong>
+        <strong>${pct(winPct)}</strong>
       </div>
-    `)
-    .join("");
+    `;
+      })
+    ];
+  }).join("");
 }
 
 function renderLeaders() {
@@ -762,14 +771,15 @@ function renderLeaders() {
 }
 
 function renderStatus() {
-  elements.updatedAt.textContent = new Date().toLocaleString("ja-JP");
-  if (state.warnings.length) {
-    elements.fetchStatus.textContent = "一部取得エラー";
-    elements.fetchStatus.className = "warning";
-  } else if (state.lastFetchMessage) {
-    elements.fetchStatus.textContent = state.lastFetchMessage;
-    elements.fetchStatus.className = "";
-  }
+  const dateLabel = (time) => time ? new Date(time).toLocaleString("ja-JP") : "-";
+  elements.updatedAt.textContent = dateLabel(state.statsFetchedAt);
+  elements.standingsUpdatedAt.textContent = dateLabel(state.standingsFetchedAt);
+  elements.fetchWarnings.hidden = !state.warnings.length;
+  elements.fetchWarnings.replaceChildren(...state.warnings.map((warning) => {
+    const line = document.createElement("li");
+    line.textContent = warning;
+    return line;
+  }));
 }
 
 function render() {
@@ -792,7 +802,7 @@ async function api(path, timeoutMs = 45000) {
   try {
     const response = await fetch(path, { cache: "no-store", signal: controller.signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    return response.json();
+    return await response.json();
   } catch (error) {
     if (error.name === "AbortError") throw new Error("通信がタイムアウトしました。再度、最新取得を押してください。");
     throw error;
@@ -879,26 +889,50 @@ async function loadSalaryPlayerInfo(requestId = state.detailRequestId) {
   return warnings;
 }
 
+function setSeasonOptions(select, seasons, defaultSeason, selectedSeason) {
+  select.dataset.defaultSeason = defaultSeason;
+  const available = new Set([...seasons, selectedSeason]);
+  select.replaceChildren(...Array.from(available, (season) => new Option(season, season)));
+  select.value = selectedSeason;
+}
+
 async function loadBootstrap() {
+  state.bootstrapLoading = true;
+  state.detailRequestId += 1;
   setLoading("リーグデータ取得中");
-  const query = new URLSearchParams({
-    statsSeason: elements.statsSeason.value,
-    salarySeason: elements.salarySeason.value,
-    seasonType: elements.seasonType.value
-  });
-  if (state.refreshToken) query.set("refresh", state.refreshToken);
-  const data = await api(`/api/bootstrap?${query}`);
-  state.teams = data.teams || [];
-  state.teamStats = data.teamStats || [];
-  state.playerStats = data.playerStats || [];
-  state.capLines = data.capLines || {};
-  state.sources = data.sourceLinks || {};
-  state.warnings = data.warnings || [];
-  if (!state.teams.find((team) => team.abbr === state.selectedAbbr)) {
-    state.selectedAbbr = state.teams[0]?.abbr || "LAL";
+  try {
+    const query = new URLSearchParams({ seasonType: elements.seasonType.value });
+    for (const select of [elements.statsSeason, elements.salarySeason]) {
+      if (select.value && select.value !== select.dataset.defaultSeason) query.set(select.id, select.value);
+    }
+    if (state.refreshToken) query.set("refresh", state.refreshToken);
+    const data = await api(`/api/bootstrap?${query}`);
+    state.statsSeason = data.statsSeason;
+    state.salarySeason = data.salarySeason;
+    state.seasonType = data.seasonType;
+    setSeasonOptions(elements.statsSeason, data.defaults.statsSeasons, data.defaults.statsSeason, data.statsSeason);
+    setSeasonOptions(elements.salarySeason, data.defaults.salarySeasons, data.defaults.salarySeason, data.salarySeason);
+    state.teams = data.teams || [];
+    state.teamStats = data.teamStats || [];
+    state.playerStats = data.playerStats || [];
+    state.standingsByTeam = new Map((data.standings || []).map((standing) => [standing.teamId, standing]));
+    state.statsFetchedAt = data.generatedAt;
+    state.standingsFetchedAt = data.standingsFetchedAt;
+    state.capLines = data.capLines || {};
+    state.sources = data.sourceLinks || {};
+    state.bootstrapWarnings = data.warnings || [];
+    state.warnings = state.bootstrapWarnings;
+    state.roster = [];
+    state.contracts = null;
+    state.draftPicks = null;
+    if (!state.teams.find((team) => team.abbr === state.selectedAbbr)) {
+      state.selectedAbbr = state.teams[0]?.abbr || "LAL";
+    }
+    render();
+    await loadTeamDetails();
+  } finally {
+    state.bootstrapLoading = false;
   }
-  render();
-  await loadTeamDetails();
 }
 
 async function loadTeamDetails() {
@@ -943,7 +977,7 @@ async function loadTeamDetails() {
       detailWarnings.push(`ドラフト指名権取得に失敗しました: ${draftResult.reason.message}`);
     }
 
-    state.warnings = [...state.warnings, ...detailWarnings];
+    state.warnings = [...state.bootstrapWarnings, ...detailWarnings];
     if (!state.warnings.length) {
       state.lastFetchMessage = state.refreshMode
         ? "Webから最新取得しました"
@@ -958,16 +992,13 @@ async function loadTeamDetails() {
     });
     return;
   } catch (error) {
-    state.warnings = [...state.warnings, `${team.abbr} の詳細取得に失敗しました: ${error.message}`];
+    state.warnings = [...state.bootstrapWarnings, `${team.abbr} の詳細取得に失敗しました: ${error.message}`];
   }
   render();
   setReady();
 }
 
 elements.refreshBtn.addEventListener("click", async () => {
-  state.roster = [];
-  state.contracts = null;
-  state.draftPicks = null;
   closePlayerDetails();
   state.refreshToken = String(Date.now());
   state.refreshMode = true;
@@ -976,10 +1007,15 @@ elements.refreshBtn.addEventListener("click", async () => {
   try {
     await loadBootstrap();
     showToast(
-      state.warnings.length ? "最新取得は一部失敗しました。画面の状態欄を確認してください。" : "最新情報を取得しました。",
+      state.warnings.length
+        ? `${state.statsSeason} の最新取得に未取得の項目があります。状態欄をご確認ください。`
+        : `${state.statsSeason} の最新スタッツ・公式順位と、選択チームの情報を取得しました。`,
       state.warnings.length ? "warning" : "success"
     );
   } catch (error) {
+    elements.statsSeason.value = state.statsSeason;
+    elements.salarySeason.value = state.salarySeason;
+    elements.seasonType.value = state.seasonType;
     state.warnings = [`取得に失敗しました: ${error.message}`];
     render();
     setReady();

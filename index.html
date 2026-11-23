@@ -20,19 +20,11 @@
         <div class="controls">
           <label>
             <span>スタッツ年度</span>
-            <select id="statsSeason">
-              <option>2025-26</option>
-              <option>2024-25</option>
-              <option>2023-24</option>
-            </select>
+            <select id="statsSeason" disabled></select>
           </label>
           <label>
             <span>サラリー年度</span>
-            <select id="salarySeason">
-              <option>2026-27</option>
-              <option>2025-26</option>
-              <option>2024-25</option>
-            </select>
+            <select id="salarySeason" disabled></select>
           </label>
           <label>
             <span>種別</span>
@@ -76,8 +68,12 @@
 
         <section class="status-strip" id="statusStrip">
           <div>
-            <span>更新</span>
+            <span>スタッツ取得</span>
             <strong id="updatedAt">-</strong>
+          </div>
+          <div>
+            <span>公式順位取得</span>
+            <strong id="standingsUpdatedAt">-</strong>
           </div>
           <div>
             <span>データ元</span>
@@ -88,6 +84,7 @@
             <strong id="fetchStatus">取得中</strong>
           </div>
         </section>
+        <ul class="fetch-warnings warning" id="fetchWarnings" hidden></ul>
 
         <section class="kpi-grid" id="kpiGrid"></section>
 
@@ -171,8 +168,8 @@
           <div class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">League Rank</p>
-                <h3>チーム順位</h3>
+                <p class="eyebrow" id="rankingsSeason">Regular Season</p>
+                <h3>東西の上位5チーム</h3>
               </div>
             </div>
             <div id="teamRankings" class="ranking-list"></div>
